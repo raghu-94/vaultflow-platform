@@ -59,6 +59,3 @@ jobs:
           git config user.name "CI Pipeline"
           git add . && git commit -m "ci: update auth-service to ${{ github.sha }}"
           git push
- git add .github/workflows/ci.yml
- git commit -m "split test and build-and-push jobs for PR-based CI"
- git push
