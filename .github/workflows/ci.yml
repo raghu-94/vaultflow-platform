@@ -1,0 +1,64 @@
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+env:
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+  IMAGE_NAME: auth-service
+jobs:
+  # Runs on BOTH pull requests and pushes — catches bugs before merge
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Run Unit Tests
+        run: cd services/auth-service && npm install && npm test
+  # Only runs on an actual push to main — never on a PR
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t $IMAGE_NAME:${{ github.sha }} \
+            services/auth-service/
+      - name: Trivy Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+          ignore-unfixed: true
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ap-south-1 | \
+            docker login --username AWS \
+            --password-stdin $ECR_REGISTRY
+      - name: Push to ECR
+        run: |
+          docker tag $IMAGE_NAME:${{ github.sha }} \
+            $ECR_REGISTRY/$IMAGE_NAME:${{ github.sha }}
+          docker push $ECR_REGISTRY/$IMAGE_NAME:${{ github.sha }}
+      - name: Update GitOps Repo with New Image Tag
+        if: github.ref == 'refs/heads/main'
+        run: |
+          git clone https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/raghu-94/vaultflow-gitops.git
+          cd vaultflow-gitops
+          sed -i -E "s|^(\s*tag:).*$|\1 ${{ github.sha }}|" environments/prod/auth-service/values-prod.yaml
+          git config user.email "ci@vaultflow.com"
+          git config user.name "CI Pipeline"
+          git add . && git commit -m "ci: update auth-service to ${{ github.sha }}"
+          git push
+ git add .github/workflows/ci.yml
+ git commit -m "split test and build-and-push jobs for PR-based CI"
+ git push
