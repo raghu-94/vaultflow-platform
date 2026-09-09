@@ -1,0 +1,79 @@
+name: CI Pipeline — Build, Scan & Push to ECR
+
+# Trigger: runs on every push to main branch
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ECR registry URL built from your AWS account ID secret
+env:
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com
+  IMAGE_NAME: auth-service
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout the code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Configure AWS credentials from secrets
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      # Step 3: Run unit tests before building anything
+      - name: Run Unit Tests
+        run: cd services/auth-service && npm install && npm test
+
+      # Step 4: Build Docker image tagged with git commit SHA
+      - name: Build Docker Image
+        run: |
+          docker build \
+            -t $IMAGE_NAME:${{ github.sha }} \
+            services/auth-service/
+
+      # Step 5: Trivy security scan — fail on CRITICAL CVEs
+      - name: Trivy Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'      # pipeline fails if CRITICAL found
+          ignore-unfixed: true
+
+      # Step 6: Login to ECR
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region ap-south-1 | \
+            docker login --username AWS \
+            --password-stdin $ECR_REGISTRY
+
+      # Step 7: Tag and push image to ECR
+      - name: Push to ECR
+        run: |
+          docker tag $IMAGE_NAME:${{ github.sha }} \
+            $ECR_REGISTRY/$IMAGE_NAME:${{ github.sha }}
+          docker push $ECR_REGISTRY/$IMAGE_NAME:${{ github.sha }}
+          echo "Image pushed: $ECR_REGISTRY/$IMAGE_NAME:${{ github.sha }}"
+
+      # Step 8: Update image tag in GitOps repo (ArgoCD picks this up)
+      - name: Update GitOps Repo with New Image Tag
+        run: |
+          git clone https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/raghu-94/vaultflow-gitops.git
+          # GITOPS_TOKEN is a PAT with repo scope — added as secret in Step 5.3
+          # GITHUB_TOKEN cannot push to other repos — GITOPS_TOKEN is required here
+          cd vaultflow-gitops
+          # Safe sed: matches '  tag: ...' on its own line, preserves indentation, ignores flow-style braces
+          sed -i -E "s|^(\s*tag:).*$|\1 ${{ github.sha }}|" environments/prod/auth-service/values-prod.yaml
+          git config user.email "ci@vaultflow.com"
+          git config user.name "CI Pipeline"
+          git add . && git commit -m "ci: update auth-service to ${{ github.sha }}"
+          git push
