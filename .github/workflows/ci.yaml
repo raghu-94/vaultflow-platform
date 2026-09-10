@@ -58,3 +58,16 @@ jobs:
           git config user.name "CI Pipeline"
           git add . && git commit -m "ci: update auth-service to ${{ github.sha }}"
           git push
+- name: Update GitOps Repo with New Image Tag
+        if: github.ref == 'refs/heads/main'  # only on main branch push
+        run: |
+          git clone https://x-access-token:${{ secrets.GITOPS_TOKEN }}@github.com/raghu-94/vaultflow-gitops.git
+          cd vaultflow-gitops
+          # Update image tag in prod values file (safe regex: matches '  tag: ...', preserves indentation)
+          sed -i -E "s|^(\s*tag:).*$|\1 ${{ github.sha }}|" \
+            environments/prod/auth-service/values-prod.yaml
+          git config user.email "ci-pipeline@vaultflow.com"
+          git config user.name "CI Pipeline"
+          git add environments/prod/auth-service/values-prod.yaml
+          git commit -m "ci: deploy auth-service@${{ github.sha }} to prod"
+          git push
