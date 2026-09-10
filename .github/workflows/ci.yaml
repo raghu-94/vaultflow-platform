@@ -56,5 +56,6 @@ jobs:
           sed -i -E "s|^(\s*tag:).*$|\1 ${{ github.sha }}|" environments/prod/auth-service/values-prod.yaml
           git config user.email "ci@vaultflow.com"
           git config user.name "CI Pipeline"
-          git add . && git commit -m "ci: update auth-service to ${{ github.sha }}"
+          git add environments/prod/auth-service/values-prod.yaml
+          git commit -m "ci: update auth-service to ${{ github.sha }}"
           git push
